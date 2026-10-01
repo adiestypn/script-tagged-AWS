@@ -3,7 +3,7 @@
 # ================= KONFIGURASI =================
 REGION="ap-southeast-1"
 TAG_KEY="aws-apn-id"
-TAG_VALUE="692392mki9axqgrknb1fcroue"
+TAG_VALUE="pc:692392mki9axqgrknb1fcroue"
 # ===============================================
 
 export AWS_PAGER=""
