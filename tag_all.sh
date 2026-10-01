@@ -46,12 +46,13 @@ while true; do
                 --resource-arn-list "${BATCH[@]}" \
                 --tags "${TAG_KEY}=${TAG_VALUE}" 2>&1)
             
-            # Detect various limit/throttle keywords from AWS
+           # Detect various limit/throttle keywords from AWS
             if echo "$TAG_RESULT" | grep -qEi "Throttling|Rate exceeded|RequestLimitExceeded|throttled"; then
                 echo ""
                 echo "🚨 STOP! AWS API Limit Detected."
                 echo "Error Detail: $TAG_RESULT"
                 echo "Script forcibly stopped to prevent account block/suspension."
+                echo "⏳ Please wait 3-5 minutes for the API quota to recover before running the script again."
                 exit 1
             fi
             
