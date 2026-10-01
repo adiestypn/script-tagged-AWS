@@ -1,20 +1,22 @@
 #!/bin/bash
 
-# ================= KONFIGURASI =================
+# ================= CONFIGURATION =================
 REGION="ap-southeast-1"
 TAG_KEY="aws-apn-id"
 TAG_VALUE="pc:692392mki9axqgrknb1fcroue"
-# ===============================================
+# =================================================
 
 export AWS_PAGER=""
+
+# Disable auto-retry so the script can immediately detect if it hits the API limit
 export AWS_MAX_ATTEMPTS=1 
 
 TOKEN=""
 TOTAL_PROCESSED=0
 SKIPPED=0
 
-echo "Memulai proses TAGGING BATCH 20 (Smart Resume) di $REGION..."
-echo "Catatan: Mengabaikan resource EKS (Pod/Service dll) yang tidak didukung AWS Tagging."
+echo "Starting FAST BATCH TAGGING (20 resources/request) in $REGION..."
+echo "Note: The script will AUTOMATICALLY STOP if it hits the API Limit."
 echo "------------------------------------------------------------"
 
 while true; do
@@ -24,9 +26,10 @@ while true; do
         RESPONSE=$(aws resourcegroupstaggingapi get-resources --region "$REGION" --pagination-token "$TOKEN" --output json)
     fi
 
-    # SMART FILTER: Ambil ARN untagged, lalu buang (grep -v) ARN EKS yang pasti error
-    ARNS=($(echo "$RESPONSE" | jq -r --arg key "$TAG_KEY" '.ResourceTagMappingList[] | select(.Tags == null or all(.Tags[]; .Key != $key)) | .ResourceARN' | grep -vEi ":pod/|:service/|:replicaset/|:endpointslice/|:deployment/|:ingress/|:persistentvolume/"))
-    
+    # SMART FILTER: Ambil ARN yang belum punya tag ATAU punya tag tapi valuenya salah. Abaikan EKS pods/services.
+    ARNS=($(echo "$RESPONSE" | jq -r --arg key "$TAG_KEY" --arg val "$TAG_VALUE" '.ResourceTagMappingList[] | select(.Tags == null or (any(.Tags[]; .Key == $key and .Value == $val) | not)) | .ResourceARN' | grep -vEi ":pod/|:service/|:replicaset/|:endpointslice/|:deployment/|:ingress/|:persistentvolume/"))
+
+    # Hitung jumlah resource yang dilewati (sudah sesuai atau tidak didukung)
     TOTAL_IN_PAGE=$(echo "$RESPONSE" | jq -r '.ResourceTagMappingList | length')
     SKIPPED_IN_PAGE=$((TOTAL_IN_PAGE - ${#ARNS[@]}))
     SKIPPED=$((SKIPPED + SKIPPED_IN_PAGE))
@@ -35,21 +38,24 @@ while true; do
         for ((i=0; i<${#ARNS[@]}; i+=20)); do
             BATCH=("${ARNS[@]:i:20}")
             
-            echo "Memproses tag untuk resource ke-$((TOTAL_PROCESSED + 1)) sampai $((TOTAL_PROCESSED + ${#BATCH[@]}))..."
+            echo "Processing tags for resources $((TOTAL_PROCESSED + 1)) to $((TOTAL_PROCESSED + ${#BATCH[@]}))..."
             
+            # Capture all output into a variable
             TAG_RESULT=$(aws resourcegroupstaggingapi tag-resources \
                 --region "$REGION" \
                 --resource-arn-list "${BATCH[@]}" \
                 --tags "${TAG_KEY}=${TAG_VALUE}" 2>&1)
             
+            # Detect various limit/throttle keywords from AWS
             if echo "$TAG_RESULT" | grep -qEi "Throttling|Rate exceeded|RequestLimitExceeded|throttled"; then
                 echo ""
-                echo "🚨 STOP! Terdeteksi API Limit dari AWS."
-                echo "Detail Error: $TAG_RESULT"
-                echo "Tunggu 3-5 menit, lalu jalankan lagi untuk Melanjutkan (Resume)."
+                echo "🚨 STOP! AWS API Limit Detected."
+                echo "Error Detail: $TAG_RESULT"
+                echo "Script forcibly stopped to prevent account block/suspension."
                 exit 1
             fi
             
+            # Show output ONLY if there's an error other than "empty"
             if ! echo "$TAG_RESULT" | grep -q '"FailedResourcesMap": {}'; then
                 echo "$TAG_RESULT"
             fi
@@ -66,5 +72,5 @@ while true; do
 done
 
 echo "------------------------------------------------------------"
-echo "🎉 Selesai! Berhasil men-tag $TOTAL_PROCESSED resource."
-echo "⏩ Melewati $SKIPPED resource (sudah di-tag / tidak didukung)."
+echo "🎉 Done! Successfully processed $TOTAL_PROCESSED resources."
+echo "⏩ Skipped $SKIPPED resources (already tagged correctly or unsupported EKS resources)."
